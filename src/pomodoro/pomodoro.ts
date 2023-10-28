@@ -86,7 +86,7 @@ export const createPomodoro = (props: PomodoroProps): Pomodoro => {
       } else {
         seconds = seconds - 1;
       }
-    }, 10);
+    }, 1000);
   };
 
   const clearTimer = () => {
