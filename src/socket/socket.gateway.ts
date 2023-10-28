@@ -13,11 +13,6 @@ export class SocketGateway implements OnGatewayConnection {
 
   constructor(private readonly socketService: SocketService) {
     console.log('constructor');
-    // this.server.emit('message', {
-    //   name: tags['display-name'],
-    //   userId: tags['user-id'],
-    //   message: message,
-    // });
   }
 
   handleConnection(socket: Socket): void {

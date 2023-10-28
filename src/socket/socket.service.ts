@@ -53,8 +53,10 @@ export class SocketService {
             shortBreakDuration: data.shortBreakDuration,
             rounds: data.rounds,
             onUpdateState: (state) => {
-              socket.emit('client_update', state);
-              socket.broadcast.to(roomId).emit('client_update', state);
+              socket.emit('client_update', { ...state, isFinished: true });
+              socket.broadcast
+                .to(roomId)
+                .emit('client_update', { ...state, isFinished: true });
             },
           }),
         );
@@ -77,18 +79,23 @@ export class SocketService {
           shortBreakDuration: data.shortBreakDuration,
           rounds: data.rounds,
           onUpdateState: (state) => {
-            socket.emit('client_update', state);
+            socket.emit('client_update', { ...state, isFinished: true });
             socket.broadcast
               .to(clientState.roomId)
-              .emit('client_update', state);
+              .emit('client_update', { ...state, isFinished: true });
           },
         }),
       );
 
+      const state = this.pomodoroStates.get(clientState.roomId).getState();
+
+      socket.emit('client_update', state);
+      socket.broadcast.to(clientState.roomId).emit('client_update', state);
+
       console.log('server_update', data);
     });
 
-    socket.on('server_get', async (data) => {
+    socket.on('server_get', async (data, callback) => {
       const clientState = this.connectedClients.get(clientId);
 
       const roomId = data.roomId;
@@ -101,9 +108,7 @@ export class SocketService {
 
       if (pomodoroState) {
         const state = pomodoroState.getState();
-
-        socket.emit('client_update', state);
-        socket.broadcast.to(clientState.roomId).emit('client_update', state);
+        callback(state);
       }
 
       console.log('server_get');
