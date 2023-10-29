@@ -1,6 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Socket } from 'socket.io';
-import { Pomodoro, createPomodoro } from 'src/pomodoro/pomodoro';
+import { createPomodoro, pomodoroDefaultValues } from 'src/pomodoro/pomodoro';
+import { PomodoroTimer } from 'src/types/pomodoro.types';
+import {
+  GetSettingsCallback,
+  GetSettingsData,
+  GetStateCallback,
+  GetStateData,
+  UpdateSettingsData,
+} from 'src/types/socket.types';
 
 type ClientState = {
   socket: Socket;
@@ -10,130 +18,159 @@ type ClientState = {
 @Injectable()
 export class SocketService {
   private readonly connectedClients: Map<string, ClientState> = new Map();
-  private readonly pomodoroStates: Map<string, Pomodoro> = new Map();
+  private readonly pomodoroTimers: Map<string, PomodoroTimer> = new Map();
 
-  private socket: Socket;
+  constructor(private readonly logger: Logger) {}
+
+  handleDisconnect(socket: Socket): void {
+    const client = this.connectedClients.get(socket.id);
+
+    if (client.roomId) {
+      socket.leave(client.roomId);
+    }
+
+    this.connectedClients.delete(socket.id);
+
+    this.logger.log('disconnected');
+  }
 
   handleConnection(socket: Socket): void {
     const clientId = socket.id;
     this.connectedClients.set(clientId, { socket });
 
-    this.socket = socket;
+    this.logger.log('connected');
+  }
 
-    socket.on('disconnect', () => {
-      console.log('disconnected');
-      const clientState = this.connectedClients.get(clientId);
+  async handleUpdateSettings(socket: Socket, data: UpdateSettingsData) {
+    const client = this.connectedClients.get(socket.id);
+    const pomodoroTimer = this.pomodoroTimers.get(client.roomId);
 
-      if (clientState.roomId) {
-        socket.leave(clientState.roomId);
-      }
+    if (!pomodoroTimer) {
+      return;
+    }
 
-      this.connectedClients.delete(clientId);
+    pomodoroTimer?.finish();
+
+    const updatedTimer = createPomodoro({
+      focusDuration: data.focusDuration,
+      longBreakDuration: data.longBreakDuration,
+      shortBreakDuration: data.shortBreakDuration,
+      rounds: data.rounds,
+      onStatusUpdate: (state) => {
+        this.emitToRoom(socket, client.roomId, 'updateState', state);
+      },
     });
 
-    socket.on('server_init', async (data) => {
-      const clientState = this.connectedClients.get(clientId);
+    this.pomodoroTimers.set(client.roomId, updatedTimer);
 
-      const roomId = data.roomId;
-      if (!clientState.roomId) {
-        await socket.join(roomId);
-        this.connectedClients.set(clientId, { ...clientState, roomId });
-      }
+    const state = this.pomodoroTimers.get(client.roomId).getState();
 
-      const pomodoroState = this.pomodoroStates.get(roomId);
+    this.emitToRoom(socket, client.roomId, 'updateState', state);
 
-      if (!pomodoroState) {
-        pomodoroState?.clearTimer();
+    this.logger.log('update settings');
+  }
 
-        this.pomodoroStates.set(
-          roomId,
-          createPomodoro({
-            focusDuration: data.focusDuration,
-            longBreakDuration: data.longBreakDuration,
-            shortBreakDuration: data.shortBreakDuration,
-            rounds: data.rounds,
-            onUpdateState: (state) => {
-              socket.emit('client_update', { ...state, isFinished: true });
-              socket.broadcast
-                .to(roomId)
-                .emit('client_update', { ...state, isFinished: true });
-            },
-          }),
-        );
-      }
+  async handleGetState(
+    socket: Socket,
+    data: GetStateData,
+    callback: GetStateCallback,
+  ) {
+    const client = this.connectedClients.get(socket.id);
+    const roomId = data.roomId;
 
-      console.log('server_init', data);
-    });
+    if (!roomId) {
+      return;
+    }
 
-    socket.on('server_update', async (data) => {
-      const clientState = this.connectedClients.get(clientId);
-      const pomodoroState = this.pomodoroStates.get(clientState.roomId);
+    if (!client.roomId) {
+      await socket.join(roomId);
+      this.connectedClients.set(socket.id, { ...client, roomId });
+    }
 
-      pomodoroState?.clearTimer();
+    const pomodorTimer = this.pomodoroTimers.get(roomId);
 
-      this.pomodoroStates.set(
-        clientState.roomId,
-        createPomodoro({
-          focusDuration: data.focusDuration,
-          longBreakDuration: data.longBreakDuration,
-          shortBreakDuration: data.shortBreakDuration,
-          rounds: data.rounds,
-          onUpdateState: (state) => {
-            socket.emit('client_update', { ...state, isFinished: true });
-            socket.broadcast
-              .to(clientState.roomId)
-              .emit('client_update', { ...state, isFinished: true });
-          },
-        }),
-      );
+    if (pomodorTimer) {
+      const state = pomodorTimer.getState();
+      callback(state);
+    }
 
-      const state = this.pomodoroStates.get(clientState.roomId).getState();
+    this.logger.log('get state');
+  }
 
-      socket.emit('client_update', state);
-      socket.broadcast.to(clientState.roomId).emit('client_update', state);
+  handleRun(socket: Socket) {
+    const client = this.connectedClients.get(socket.id);
+    const pomodoroTimer = this.pomodoroTimers.get(client.roomId);
 
-      console.log('server_update', data);
-    });
+    if (!pomodoroTimer) {
+      return;
+    }
 
-    socket.on('server_get', async (data, callback) => {
-      const clientState = this.connectedClients.get(clientId);
+    pomodoroTimer.run();
 
-      const roomId = data.roomId;
-      if (!clientState.roomId) {
-        await socket.join(roomId);
-        this.connectedClients.set(clientId, { ...clientState, roomId });
-      }
+    const state = pomodoroTimer.getState();
 
-      const pomodoroState = this.pomodoroStates.get(roomId);
+    this.emitToRoom(socket, client.roomId, 'updateState', state);
 
-      if (pomodoroState) {
-        const state = pomodoroState.getState();
-        callback(state);
-      }
+    this.logger.log('run');
+  }
 
-      console.log('server_get');
-    });
+  handlePause(socket: Socket) {
+    const client = this.connectedClients.get(socket.id);
+    const pomodoroTimer = this.pomodoroTimers.get(client.roomId);
 
-    socket.on('server_toggle', (play) => {
-      const clientState = this.connectedClients.get(clientId);
-      const pomodoroState = this.pomodoroStates.get(clientState.roomId);
+    if (!pomodoroTimer) {
+      return;
+    }
 
-      console.log(play);
+    pomodoroTimer.pause();
 
-      if (play) {
-        pomodoroState.start();
-      } else {
-        pomodoroState.clearTimer();
-      }
+    const state = pomodoroTimer.getState();
 
-      const state = pomodoroState.getState();
+    this.emitToRoom(socket, client.roomId, 'updateState', state);
 
-      socket.emit('client_update', state);
-      socket.broadcast.to(clientState.roomId).emit('client_update', state);
+    this.logger.log('pause');
+  }
 
-      console.log('server_toggle', state);
-    });
+  async handleGetSettings(
+    socket: Socket,
+    data: GetSettingsData,
+    callback: GetSettingsCallback,
+  ): Promise<void> {
+    const client = this.connectedClients.get(socket.id);
+    const roomId = data.roomId;
 
-    console.log('connected');
+    if (!roomId) {
+      return;
+    }
+
+    if (!client.roomId) {
+      await socket.join(roomId);
+      this.connectedClients.set(socket.id, { ...client, roomId });
+    }
+
+    let pomodoroTimer = this.pomodoroTimers.get(roomId);
+
+    if (!pomodoroTimer) {
+      pomodoroTimer = createPomodoro({
+        focusDuration: pomodoroDefaultValues.focusDuration,
+        longBreakDuration: pomodoroDefaultValues.longBreakDuration,
+        shortBreakDuration: pomodoroDefaultValues.shortBreakDuration,
+        rounds: pomodoroDefaultValues.rounds,
+        onStatusUpdate: (state) => {
+          this.emitToRoom(socket, client.roomId, 'updateState', state);
+        },
+      });
+
+      this.pomodoroTimers.set(roomId, pomodoroTimer);
+    }
+
+    callback(pomodoroTimer.getSettings(), pomodoroTimer.getState());
+
+    this.logger.log('get settings');
+  }
+
+  private emitToRoom<T>(socket: Socket, roomId: string, name: string, data: T) {
+    socket.emit(name, data);
+    socket.broadcast.to(roomId).emit(name, data);
   }
 }

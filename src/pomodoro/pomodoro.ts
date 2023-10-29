@@ -1,85 +1,78 @@
-export type OnUpdateStateProps = {
-  round: number;
-  status: PomodoroStatus;
+import {
+  PomodoroProps,
+  PomodoroState,
+  PomodoroTimer,
+  PomodoroTimerState,
+  PomodoroTimerStatus,
+} from 'src/types/pomodoro.types';
+
+export const pomodoroDefaultValues = {
+  focusDuration: 25,
+  longBreakDuration: 15,
+  shortBreakDuration: 5,
+  rounds: 4,
 };
 
-export type PomodoroProps = {
-  focusDuration: number;
-  shortBreakDuration: number;
-  longBreakDuration: number;
-  rounds: number;
-  onUpdateState: (state: PomodoroState) => void;
-};
-
-export type PomodoroState = {
-  seconds: number;
-  minutes: number;
-  round: number;
-  status: PomodoroStatus;
-  play: boolean;
-};
-
-export type Pomodoro = {
-  start: () => void;
-  clearTimer: () => void;
-  getState: () => PomodoroState;
-};
-
-export enum PomodoroStatus {
-  focus = 'focus',
-  shortBreak = 'shortBreak',
-  longBreak = 'longBreak',
-}
-
-export const createPomodoro = (props: PomodoroProps): Pomodoro => {
+export const createPomodoro = (props: PomodoroProps): PomodoroTimer => {
   const {
     focusDuration,
     longBreakDuration,
     shortBreakDuration,
     rounds,
-    onUpdateState,
+    onStatusUpdate,
   } = props;
 
   let seconds = 0;
   let minutes = focusDuration;
   let round = 0;
-  let status = PomodoroStatus.focus;
+  let status = PomodoroTimerStatus.focus;
   let timer: NodeJS.Timeout;
+  let state: PomodoroTimerState;
 
   const getState = (): PomodoroState => ({
     seconds,
     minutes,
     round,
     status,
-    play: timer != null,
+    state,
   });
 
-  const start = () => {
+  const getSettings = () => ({
+    focusDuration,
+    longBreakDuration,
+    shortBreakDuration,
+    rounds,
+  });
+
+  const run = () => {
+    state = PomodoroTimerState.isRunning;
     clearTimer();
+
     timer = setInterval(() => {
       if (seconds == 0) {
         minutes = minutes - 1;
 
         if (minutes < 0) {
-          if (status == PomodoroStatus.focus) {
+          if (status == PomodoroTimerStatus.focus) {
             status =
-              round >= rounds
-                ? PomodoroStatus.longBreak
-                : PomodoroStatus.shortBreak;
-            minutes = round >= rounds ? longBreakDuration : shortBreakDuration;
-          } else if (status == PomodoroStatus.shortBreak) {
-            status = PomodoroStatus.focus;
+              round >= rounds - 1
+                ? PomodoroTimerStatus.longBreak
+                : PomodoroTimerStatus.shortBreak;
+            minutes =
+              round >= rounds - 1 ? longBreakDuration : shortBreakDuration;
+          } else if (status == PomodoroTimerStatus.shortBreak) {
+            status = PomodoroTimerStatus.focus;
             minutes = focusDuration;
             round = round + 1;
-          } else if (status == PomodoroStatus.longBreak) {
-            status = PomodoroStatus.focus;
+          } else if (status == PomodoroTimerStatus.longBreak) {
+            status = PomodoroTimerStatus.focus;
             minutes = focusDuration;
             round = 0;
           }
 
-          clearTimer();
+          finish();
 
-          onUpdateState(getState());
+          onStatusUpdate(getState());
         } else {
           seconds = 59;
         }
@@ -96,9 +89,21 @@ export const createPomodoro = (props: PomodoroProps): Pomodoro => {
     }
   };
 
+  const pause = () => {
+    state = PomodoroTimerState.isPaused;
+    clearTimer();
+  };
+
+  const finish = () => {
+    state = PomodoroTimerState.isFinished;
+    clearTimer();
+  };
+
   return {
-    start,
-    clearTimer,
+    run,
+    pause,
+    finish,
     getState,
+    getSettings,
   };
 };
