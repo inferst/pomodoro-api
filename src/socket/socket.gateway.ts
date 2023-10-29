@@ -6,7 +6,7 @@ import {
 import { Socket } from 'socket.io';
 import { SocketService } from './socket.service';
 
-@WebSocketGateway({ cors: true, path: '/api' })
+@WebSocketGateway({ cors: true, path: process.env.SOCKET_PATH })
 export class SocketGateway implements OnGatewayConnection {
   @WebSocketServer()
   private server: Socket;
