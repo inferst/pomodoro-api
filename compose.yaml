@@ -9,6 +9,8 @@ services:
     build: .
     volumes:
       - ./:/app
+    environment:
+      - SOCKET_PATH=${SOCKET_PATH}
 
 networks:
   default:
